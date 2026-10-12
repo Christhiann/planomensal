@@ -1,30 +1,21 @@
 import re
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 from docx import Document
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = (BASE_DIR.parent / "templates" / "PLANO MENSAL CMT XLVII.docx").resolve()
+TEMPLATE_PATH = BASE_DIR / "templates" / "PLANO MENSAL CMT XLVII.docx"
 OUTPUT_DIR = BASE_DIR / "generated"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(
     title="Plano Mensal API",
     version="0.1.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
 )
 
 
@@ -219,25 +210,31 @@ def _fill_fields_by_label(document: Document, data: PlanoData) -> None:
                         _set_cell_text(target, value)
 
 
-def generate_document_from_template(
-    data: PlanoData,
-    template_path: Path = TEMPLATE_PATH,
-    output_path: Path | None = None,
-) -> Path:
+def _generate_document_bytes(data: PlanoData, template_path: Path) -> bytes:
     if not template_path.exists():
         raise FileNotFoundError(f"Template não encontrado: {template_path}")
 
     document = Document(template_path)
     replacements = _build_replacements(data)
     _replace_in_document(document, replacements)
-    # Also fill fields located by labels into adjacent cells
     _fill_fields_by_label(document, data)
 
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def generate_document_from_template(
+    data: PlanoData,
+    template_path: Path = TEMPLATE_PATH,
+    output_path: Path | None = None,
+) -> Path:
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = OUTPUT_DIR / f"plano_mensal_{timestamp}.docx"
 
-    document.save(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(_generate_document_bytes(data, template_path))
     return output_path
 
 
@@ -249,12 +246,13 @@ def health():
 @app.post("/api/planos")
 def criar_plano(data: PlanoData):
     try:
-        output_path = generate_document_from_template(data)
+        document_content = _generate_document_bytes(data, TEMPLATE_PATH)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return FileResponse(
-        output_path,
+    filename = quote(f"{data.nomeArquivo}.docx", safe="")
+    return Response(
+        content=document_content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=f"{data.nomeArquivo}.docx",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )

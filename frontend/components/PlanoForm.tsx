@@ -92,7 +92,7 @@ export default function PlanoForm() {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:8000/api/planos", {
+      const response = await fetch("/api/planos", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
